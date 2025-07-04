@@ -1,0 +1,11 @@
+*.mp4
+
+input/*
+dataset/*
+test/*
+runs/*
+
+!input/.gitkeep
+!dataset/.gitkeep
+!test/.gitkeep
+!runs/.gitkeep
