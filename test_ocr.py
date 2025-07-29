@@ -1,6 +1,5 @@
 import argparse
 import os
-import re
 import sys
 import subprocess  # Necesario para ejecutar comandos externos como ssocr
 
