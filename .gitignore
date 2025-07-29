@@ -1,5 +1,7 @@
 *.mp4
 
+extracted_images/*
+
 input/*
 dataset/*
 test/*
