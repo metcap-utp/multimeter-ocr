@@ -24,7 +24,7 @@ CROP_END_Y = 0.85
 
 
 model = YOLO(MODEL_PATH)
-easyocr_reader = None  # Se inicializará solo si se elige EasyOCR
+easyocr_reader = None
 
 
 def extract_decimal(text):
@@ -55,7 +55,7 @@ def extract_reading(text: str):
     m = re.search(r"\b\d{1,3}\.\d\b", t)
     if m:
         return m.group()
-    # intentar correcciones comunes y reintentar
+
     t2 = correct_common_chars(t)
     m = re.search(r"\b\d{1,3}\.\d\b", t2)
     if m:
@@ -73,8 +73,6 @@ def perform_ocr(image, ocr_engine):
     if ocr_engine == "easyocr":
         global easyocr_reader
         if easyocr_reader is None:
-            # Inicializar EasyOCR solo una vez cuando se necesite
-            print("Inicializando EasyOCR (puede tardar la primera vez)...")
             try:
                 easyocr_reader = easyocr.Reader(["en"], gpu=True)
             except Exception:
@@ -86,17 +84,15 @@ def perform_ocr(image, ocr_engine):
                 image, detail=0, allowlist="0123456789."
             )
         except TypeError:
-            # versiones antiguas pueden no aceptar allowlist
             ocr_results = easyocr_reader.readtext(image, detail=0)
 
-        # join results and apply EasyOCR-specific normalizations
         extracted_text = "\n".join(ocr_results)
-        # basic normalization: remove spaces/newlines, commas -> dot
+
         extracted_text = extracted_text.replace(" ", "").replace("\n", "")
         extracted_text = extracted_text.replace(",", ".")
-        # correct common misread characters (O->0, I->1, etc.)
+
         extracted_text = correct_common_chars(extracted_text)
-        # if multiple dots, keep only the last as decimal separator
+
         if extracted_text.count(".") > 1:
             parts = extracted_text.split(".")
             extracted_text = (
@@ -119,24 +115,20 @@ def perform_ocr(image, ocr_engine):
             print(
                 "Si lo instalaste manualmente, especifica la ruta con 'pytesseract.pytesseract.tesseract_cmd = r\"ruta\\a\\tesseract.exe\"'"
             )
-            return None  # Retorna None si Tesseract no se encuentra
+            return None
         except Exception as e:
             print(f"Error al usar Tesseract: {e}")
     else:
-        # Esto no debería ocurrir si 'choices' está bien definido en argparse
         print(f"OCR engine '{ocr_engine}' not supported. Returning None.")
         return None
 
-    # intentar extraer lectura en formato nnn.n
     if extracted_text:
         reading = extract_reading(extracted_text)
         if reading:
             return reading
 
-        # si no se detectó el punto, intentar inferirlo cuando la salida sean sólo dígitos
         only_digits = re.sub(r"[^0-9]", "", extracted_text)
         if len(only_digits) >= 2:
-            # suponer que el último dígito es la parte decimal: e.j. '655' -> '65.5'
             inferred = only_digits[:-1] + "." + only_digits[-1]
             return inferred
 
@@ -147,7 +139,6 @@ def process_video_with_engine(file_name, debug, current_ocr_engine):
     """
     Lógica principal de procesamiento de video para un motor OCR específico.
     """
-    # Nombre del archivo CSV con el sufijo del motor
     base_name = os.path.splitext(file_name)[0]
     csv_path = os.path.join(
         OUTPUT_DIR, f"{base_name}_{current_ocr_engine}.csv"
@@ -155,10 +146,9 @@ def process_video_with_engine(file_name, debug, current_ocr_engine):
 
     base_test_path = os.path.join(
         TEST_DIR,
-        f"{base_name}_{current_ocr_engine}",  # Carpeta de depuración también con sufijo
+        f"{base_name}_{current_ocr_engine}",
     )
 
-    # Lógica para crear carpetas de depuración numeradas
     current_debug_path = None
     if debug:
         original_base_test_path = base_test_path
@@ -166,9 +156,7 @@ def process_video_with_engine(file_name, debug, current_ocr_engine):
         while os.path.exists(base_test_path):
             base_test_path = f"{original_base_test_path}({counter})"
             counter += 1
-        current_debug_path = (
-            base_test_path  # Usar esta para los subdirectorios
-        )
+        current_debug_path = base_test_path
 
         print(
             f"Creando carpeta de depuración para {current_ocr_engine}: {current_debug_path}"
@@ -213,7 +201,6 @@ def process_video_with_engine(file_name, debug, current_ocr_engine):
         time_s = time_ms / 1000
         valid_reading = None
 
-        # --- Redirigir stdout y stderr para suprimir la salida de YOLO ---
         old_stdout = sys.stdout
         old_stderr = sys.stderr
         sys.stdout = StringIO()
@@ -224,7 +211,6 @@ def process_video_with_engine(file_name, debug, current_ocr_engine):
         finally:
             sys.stdout = old_stdout
             sys.stderr = old_stderr
-        # --- Fin de la redirección ---
 
         for box in detections.boxes:
             if box.conf < CONFIDENCE_THRESHOLD:
