@@ -18,7 +18,7 @@ TEST_DIR = "test"
 
 # --- CROPPING CONFIGURATIONS ADJUSTED ---
 CROP_START_X = 0.24
-CROP_END_X = 0.92
+CROP_END_X = 0.95
 CROP_START_Y = 0.42
 CROP_END_Y = 0.85
 
@@ -35,40 +35,83 @@ def extract_decimal(text):
     return match.group() if match else None
 
 
+def correct_common_chars(s: str) -> str:
+    if not s:
+        return s
+    corrections = {"O": "0", "o": "0", "I": "1", "l": "1", "S": "5", "s": "5"}
+    for k, v in corrections.items():
+        s = s.replace(k, v)
+    return s
+
+
+def extract_reading(text: str):
+    """Extrae una lectura con formato nnn.n o mmm.n desde text.
+    Retorna la primera coincidencia o None.
+    """
+    if not text:
+        return None
+    t = text.replace(" ", "").replace("\n", "")
+    # buscar formato 1-3 digitos + punto + 1 digito
+    m = re.search(r"\b\d{1,3}\.\d\b", t)
+    if m:
+        return m.group()
+    # intentar correcciones comunes y reintentar
+    t2 = correct_common_chars(t)
+    m = re.search(r"\b\d{1,3}\.\d\b", t2)
+    if m:
+        return m.group()
+    return None
+
+
 def perform_ocr(image, ocr_engine):
     """
     Realiza el reconocimiento OCR en la imagen usando el motor especificado.
     Retorna el texto extraído o None si no se encuentra un decimal válido.
     """
-    valid_reading = None
+    extracted_text = None
 
     if ocr_engine == "easyocr":
         global easyocr_reader
         if easyocr_reader is None:
             # Inicializar EasyOCR solo una vez cuando se necesite
             print("Inicializando EasyOCR (puede tardar la primera vez)...")
-            easyocr_reader = easyocr.Reader(["en"], gpu=True)
+            try:
+                easyocr_reader = easyocr.Reader(["en"], gpu=True)
+            except Exception:
+                easyocr_reader = easyocr.Reader(["en"], gpu=False)
             print("EasyOCR inicializado.")
 
-        ocr_results = easyocr_reader.readtext(
-            image, detail=0, allowlist="0123456789."
-        )
-        for text in ocr_results:
-            text = text.strip().replace(" ", "").replace("\n", "")
-            reading = extract_decimal(text)
-            if reading:
-                valid_reading = reading
-                break
+        try:
+            ocr_results = easyocr_reader.readtext(
+                image, detail=0, allowlist="0123456789."
+            )
+        except TypeError:
+            # versiones antiguas pueden no aceptar allowlist
+            ocr_results = easyocr_reader.readtext(image, detail=0)
+
+        # join results and apply EasyOCR-specific normalizations
+        extracted_text = "\n".join(ocr_results)
+        # basic normalization: remove spaces/newlines, commas -> dot
+        extracted_text = extracted_text.replace(" ", "").replace("\n", "")
+        extracted_text = extracted_text.replace(",", ".")
+        # correct common misread characters (O->0, I->1, etc.)
+        extracted_text = correct_common_chars(extracted_text)
+        # if multiple dots, keep only the last as decimal separator
+        if extracted_text.count(".") > 1:
+            parts = extracted_text.split(".")
+            extracted_text = (
+                "".join(parts[:-1]).replace(".", "") + "." + parts[-1]
+            )
+
     elif ocr_engine == "tesseract":
         try:
             raw_text = pytesseract.image_to_string(
                 image,
                 config="--psm 6 --oem 3 -c tessedit_char_whitelist=0123456789.",
             )
-            raw_text = raw_text.strip().replace(" ", "").replace("\n", "")
-            reading = extract_decimal(raw_text)
-            if reading:
-                valid_reading = reading
+            extracted_text = (
+                raw_text.strip().replace(" ", "").replace("\n", "")
+            )
         except pytesseract.TesseractNotFoundError:
             print(
                 "Error: Tesseract no encontrado. Asegúrate de que está instalado y en tu PATH."
@@ -84,7 +127,20 @@ def perform_ocr(image, ocr_engine):
         print(f"OCR engine '{ocr_engine}' not supported. Returning None.")
         return None
 
-    return valid_reading
+    # intentar extraer lectura en formato nnn.n
+    if extracted_text:
+        reading = extract_reading(extracted_text)
+        if reading:
+            return reading
+
+        # si no se detectó el punto, intentar inferirlo cuando la salida sean sólo dígitos
+        only_digits = re.sub(r"[^0-9]", "", extracted_text)
+        if len(only_digits) >= 2:
+            # suponer que el último dígito es la parte decimal: e.j. '655' -> '65.5'
+            inferred = only_digits[:-1] + "." + only_digits[-1]
+            return inferred
+
+    return None
 
 
 def process_video_with_engine(file_name, debug, current_ocr_engine):

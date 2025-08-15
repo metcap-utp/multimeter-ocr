@@ -7,7 +7,7 @@ OUTPUT_IMAGE_PATH = "recorte_lectura.jpg"  # Nombre para la imagen de salida
 
 # Porcentajes de recorte (0.0 a 1.0) - AJUSTADOS PARA LA LECTURA DE CORRIENTE
 CROP_START_X = 0.24
-CROP_END_X = 0.92
+CROP_END_X = 0.95
 CROP_START_Y = 0.42
 CROP_END_Y = 0.85
 
