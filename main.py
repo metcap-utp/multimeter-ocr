@@ -22,6 +22,23 @@ CROP_END_X = 0.95
 CROP_START_Y = 0.42
 CROP_END_Y = 0.85
 
+# --- ERROR CHECKING CONFIGURATIONS ---
+FRAME_SKIP = 1  # Procesar cada N frames (reducir frecuencia de muestreo)
+MAX_CHANGE_PERCENT = (
+    50.0  # Máximo cambio porcentual permitido entre lecturas consecutivas
+)
+MEDIAN_WINDOW_SIZE = 5  # Tamaño de ventana para filtro de mediana móvil
+MIN_STABLE_COUNT = (
+    2  # Mínimo de lecturas estables antes de aceptar un cambio grande
+)
+LARGE_JUMP_THRESHOLD = 90.0  # Porcentaje que se considera un "salto grande"
+LARGE_JUMP_CONFIRMATION_FRAMES = (
+    3  # Frames consecutivos para confirmar un salto grande
+)
+OUTLIER_ISOLATION_THRESHOLD = (
+    2  # Frames consecutivos diferentes para considerar outlier aislado
+)
+
 
 model = YOLO(MODEL_PATH)
 easyocr_reader = None
@@ -42,6 +59,173 @@ def correct_common_chars(s: str) -> str:
     for k, v in corrections.items():
         s = s.replace(k, v)
     return s
+
+
+def is_valid_reading_change(
+    new_reading, prev_reading, max_change_percent=MAX_CHANGE_PERCENT
+):
+    """
+    Verifica si el cambio entre dos lecturas es válido.
+    Retorna True si el cambio es aceptable, False si es un outlier.
+    """
+    if prev_reading is None:
+        return True
+
+    try:
+        new_val = float(new_reading)
+        prev_val = float(prev_reading)
+
+        # Si alguno de los valores es 0, usar diferencia absoluta
+        if prev_val == 0:
+            return (
+                abs(new_val - prev_val) <= 10.0
+            )  # Máximo 10 unidades de diferencia
+
+        # Calcular cambio porcentual
+        change_percent = abs((new_val - prev_val) / prev_val) * 100
+        return change_percent <= max_change_percent
+    except (ValueError, ZeroDivisionError):
+        return False
+
+
+def is_large_jump(new_reading, prev_reading):
+    """
+    Determina si hay un salto grande entre dos lecturas.
+    """
+    if prev_reading is None:
+        return False
+
+    try:
+        new_val = float(new_reading)
+        prev_val = float(prev_reading)
+
+        if prev_val == 0:
+            return abs(new_val) > 10.0
+
+        change_percent = abs((new_val - prev_val) / prev_val) * 100
+        return change_percent > LARGE_JUMP_THRESHOLD
+    except (ValueError, ZeroDivisionError):
+        return False
+
+
+def validate_large_jump(
+    new_reading,
+    confirmation_buffer,
+    min_confirmations=LARGE_JUMP_CONFIRMATION_FRAMES,
+):
+    """
+    Valida si un salto grande es legítimo basándose en confirmaciones consecutivas.
+    Retorna True si el salto es válido (confirmado por lecturas consecutivas similares).
+    """
+    if len(confirmation_buffer) < min_confirmations:
+        return False
+
+    try:
+        new_val = float(new_reading)
+
+        # Verificar que las últimas lecturas sean similares a la nueva
+        similar_count = 0
+        for reading in confirmation_buffer[-min_confirmations:]:
+            if (
+                reading and abs(float(reading) - new_val) <= 0.3
+            ):  # Tolerancia más amplia
+                similar_count += 1
+
+        return similar_count >= min_confirmations - 1
+    except (ValueError, TypeError):
+        return False
+
+
+def is_isolated_outlier(new_reading, recent_readings, future_buffer=None):
+    """
+    Detecta si una lectura es un outlier aislado (diferente a las anteriores Y posteriores).
+    Si future_buffer tiene lecturas, las usa para validación adicional.
+    """
+    if len(recent_readings) < 2:
+        return False
+
+    try:
+        new_val = float(new_reading)
+
+        # Verificar diferencia con lecturas anteriores
+        different_from_past = True
+        for reading in recent_readings[-2:]:
+            if reading and abs(float(reading) - new_val) <= 0.5:
+                different_from_past = False
+                break
+
+        # Si no es muy diferente del pasado, no es outlier
+        if not different_from_past:
+            return False
+
+        # Si tenemos lecturas futuras, verificar también con ellas
+        if future_buffer and len(future_buffer) >= 2:
+            different_from_future = True
+            for reading in future_buffer[:2]:
+                if reading and abs(float(reading) - new_val) <= 0.5:
+                    different_from_future = False
+                    break
+
+            # Es outlier si es diferente tanto del pasado como del futuro
+            return different_from_past and different_from_future
+
+        # Sin futuro, solo podemos basarnos en el pasado
+        return different_from_past
+    except (ValueError, TypeError):
+        return False
+
+
+def apply_median_filter(readings_buffer):
+    """
+    Aplica un filtro de mediana a un buffer de lecturas.
+    Retorna la mediana si hay suficientes valores, None si no.
+    """
+    if len(readings_buffer) < 3:
+        return None
+
+    # Convertir a float y ordenar
+    try:
+        float_readings = [float(r) for r in readings_buffer if r is not None]
+        if len(float_readings) < 3:
+            return None
+
+        float_readings.sort()
+        mid = len(float_readings) // 2
+
+        if len(float_readings) % 2 == 0:
+            median = (float_readings[mid - 1] + float_readings[mid]) / 2
+        else:
+            median = float_readings[mid]
+
+        # Retornar como string con formato original
+        return f"{median:.1f}"
+    except (ValueError, IndexError):
+        return None
+
+
+def validate_reading_stability(
+    new_reading, recent_readings, min_stable_count=MIN_STABLE_COUNT
+):
+    """
+    Verifica si una lectura es estable comparándola con lecturas recientes.
+    Retorna True si la lectura es consistente.
+    """
+    if len(recent_readings) < min_stable_count:
+        return True
+
+    try:
+        new_val = float(new_reading)
+        similar_count = 0
+
+        for reading in recent_readings[-min_stable_count:]:
+            if (
+                reading and abs(float(reading) - new_val) <= 0.2
+            ):  # Tolerancia de 0.2
+                similar_count += 1
+
+        return similar_count >= min_stable_count - 1
+    except (ValueError, TypeError):
+        return False
 
 
 def extract_reading(text: str):
@@ -144,6 +328,15 @@ def process_video_with_engine(file_name, debug, current_ocr_engine):
         OUTPUT_DIR, f"{base_name}_{current_ocr_engine}.csv"
     )
 
+    # Si el CSV ya existe, crear uno con número entre paréntesis
+    if os.path.exists(csv_path):
+        counter = 1
+        while os.path.exists(csv_path):
+            csv_path = os.path.join(
+                OUTPUT_DIR, f"{base_name}_{current_ocr_engine}({counter}).csv"
+            )
+            counter += 1
+
     base_test_path = os.path.join(
         TEST_DIR,
         f"{base_name}_{current_ocr_engine}",
@@ -191,15 +384,32 @@ def process_video_with_engine(file_name, debug, current_ocr_engine):
     cap = cv2.VideoCapture(os.path.join(INPUT_DIR, file_name))
     prev_value = None
     results = []
+    frame_count = 0
+
+    # Buffers para el sistema de chequeo de errores
+    readings_buffer = []  # Buffer para filtro de mediana
+    recent_readings = []  # Buffer para validación de estabilidad
+    rejected_readings = []  # Para debug: lecturas rechazadas
+    confirmation_buffer = []  # Buffer para confirmar saltos grandes
+    pending_large_jump = (
+        None  # Lectura con salto grande pendiente de confirmación
+    )
 
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
 
+        frame_count += 1
+
+        # Reducir frecuencia de muestreo: procesar solo cada FRAME_SKIP frames
+        if frame_count % FRAME_SKIP != 0:
+            continue
+
         time_ms = int(cap.get(cv2.CAP_PROP_POS_MSEC))
         time_s = time_ms / 1000
         valid_reading = None
+        raw_reading = None
 
         old_stdout = sys.stdout
         old_stderr = sys.stderr
@@ -258,7 +468,89 @@ def process_video_with_engine(file_name, debug, current_ocr_engine):
             kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
             binarized = cv2.dilate(binarized, kernel, iterations=1)
 
-            valid_reading = perform_ocr(binarized, current_ocr_engine)
+            raw_reading = perform_ocr(binarized, current_ocr_engine)
+
+            # Aplicar sistema de chequeo de errores inteligente
+            if raw_reading:
+                # 1. Verificar si hay un salto grande
+                has_large_jump = is_large_jump(raw_reading, prev_value)
+
+                if has_large_jump:
+                    # Es un salto grande - necesita confirmación
+                    confirmation_buffer.append(raw_reading)
+
+                    # Si tenemos suficientes confirmaciones, validar el salto
+                    if validate_large_jump(raw_reading, confirmation_buffer):
+                        # Salto grande confirmado - es válido
+                        valid_reading = raw_reading
+
+                        # Limpiar buffer de confirmación
+                        confirmation_buffer = []
+                        pending_large_jump = None
+
+                        # Resetear buffers para el nuevo nivel de lectura
+                        readings_buffer = [raw_reading]
+                        recent_readings = [raw_reading]
+
+                        print(
+                            f"  ✓ Large jump confirmed: {prev_value} → {raw_reading}"
+                        )
+                    else:
+                        # Salto grande no confirmado aún - esperar más frames
+                        pending_large_jump = raw_reading
+                        valid_reading = None
+                        print(
+                            f"  ⏳ Large jump pending confirmation: {raw_reading}"
+                        )
+                else:
+                    # No es un salto grande - aplicar validaciones normales
+                    is_valid_change = is_valid_reading_change(
+                        raw_reading, prev_value
+                    )
+                    is_stable = validate_reading_stability(
+                        raw_reading, recent_readings
+                    )
+
+                    # Limpiar cualquier salto pendiente si esta lectura es consistente con el estado anterior
+                    if pending_large_jump and is_valid_change:
+                        confirmation_buffer = []
+                        pending_large_jump = None
+
+                    # Agregar a buffer para filtro de mediana
+                    readings_buffer.append(raw_reading)
+                    if len(readings_buffer) > MEDIAN_WINDOW_SIZE:
+                        readings_buffer.pop(0)
+
+                    # Aplicar filtro de mediana si hay suficientes lecturas
+                    filtered_reading = apply_median_filter(readings_buffer)
+
+                    # Decidir si aceptar la lectura
+                    if is_valid_change and is_stable:
+                        valid_reading = (
+                            filtered_reading
+                            if filtered_reading
+                            else raw_reading
+                        )
+
+                        # Agregar a lecturas recientes para futuras validaciones
+                        recent_readings.append(valid_reading)
+                        if len(recent_readings) > MIN_STABLE_COUNT * 2:
+                            recent_readings.pop(0)
+                    else:
+                        # Rechazar la lectura por ser inconsistente
+                        rejected_readings.append(
+                            (
+                                time_ms,
+                                raw_reading,
+                                not is_valid_change,
+                                not is_stable,
+                            )
+                        )
+                        valid_reading = None
+            else:
+                # No hay lectura OCR - limpiar confirmaciones pendientes
+                if len(confirmation_buffer) > 0:
+                    confirmation_buffer.pop()
 
             if valid_reading and valid_reading != prev_value:
                 results.append((time_ms, valid_reading))
@@ -307,8 +599,19 @@ def process_video_with_engine(file_name, debug, current_ocr_engine):
         print("-" * 30)  # Divisor antes
         if valid_reading:
             print(f"Time: {time_s:.1f} s | Reading: {valid_reading}")
+            if raw_reading != valid_reading:
+                print(f"  └─ Raw: {raw_reading} → Filtered: {valid_reading}")
         else:
             print(f"Time: {time_s:.1f} s | No reading")
+            if raw_reading:
+                if pending_large_jump:
+                    print(
+                        f"  └─ Pending large jump: {raw_reading} (need {LARGE_JUMP_CONFIRMATION_FRAMES - len(confirmation_buffer)} more confirmations)"
+                    )
+                else:
+                    print(
+                        f"  └─ Rejected: {raw_reading} (outlier or unstable)"
+                    )
         print("-" * 30)  # Divisor después
         # --- FIN IMPRESIÓN ---
 
@@ -322,6 +625,23 @@ def process_video_with_engine(file_name, debug, current_ocr_engine):
 
     # --- FINAL DEL BLOQUE DE IMPRESIÓN PARA CADA VIDEO/MOTOR ---
     print(f"\nCSV saved: {csv_path}")
+    print(f"Total valid readings: {len(results)}")
+    print(f"Total rejected readings: {len(rejected_readings)}")
+
+    if rejected_readings and debug:
+        print("\nRejected readings summary:")
+        for time_ms, reading, invalid_change, unstable in rejected_readings[
+            :10
+        ]:  # Mostrar solo los primeros 10
+            reasons = []
+            if invalid_change:
+                reasons.append("invalid_change")
+            if unstable:
+                reasons.append("unstable")
+            print(f"  {time_ms/1000:.1f}s: {reading} ({', '.join(reasons)})")
+        if len(rejected_readings) > 10:
+            print(f"  ... and {len(rejected_readings) - 10} more")
+
     print("\n" + "=" * 70)
     print(
         f" Processing of '{file_name}' with {current_ocr_engine.upper()} completed."
