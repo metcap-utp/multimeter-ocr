@@ -1,8 +1,9 @@
-import pandas as pd
-import matplotlib.pyplot as plt
-import sys
-import os
 import argparse
+import os
+import sys
+
+import matplotlib.pyplot as plt
+import pandas as pd
 
 
 def plot_csv(csv_path, save=False):
@@ -19,9 +20,7 @@ def plot_csv(csv_path, save=False):
 
         # Verificar que tenga las columnas necesarias
         if "Time (ms)" not in df.columns or "Reading" not in df.columns:
-            print(
-                "Error: El CSV debe contener las columnas 'Time (ms)' y 'Reading'"
-            )
+            print("Error: El CSV debe contener las columnas 'Time (ms)' y 'Reading'")
             return
 
         # Convertir tiempo de milisegundos a segundos
@@ -38,9 +37,7 @@ def plot_csv(csv_path, save=False):
         )
         plt.xlabel("Tiempo (s)", fontsize=12)
         plt.ylabel("Lectura", fontsize=12)
-        plt.title(
-            f"Lecturas vs Tiempo - {os.path.basename(csv_path)}", fontsize=14
-        )
+        plt.title(f"Lecturas por tiempo ({os.path.basename(csv_path)})", fontsize=14)
         plt.grid(True, alpha=0.3)
 
         # Establecer límite mínimo del eje Y en 0.0
@@ -50,7 +47,7 @@ def plot_csv(csv_path, save=False):
         plt.tight_layout()
 
         # Mostrar estadísticas
-        print(f"\n{'='*50}")
+        print(f"\n{'=' * 50}")
         print(f"Archivo: {csv_path}")
         print(f"Total de lecturas: {len(df)}")
         print(
@@ -59,7 +56,7 @@ def plot_csv(csv_path, save=False):
         print(f"Valor mínimo: {df['Reading'].min()}")
         print(f"Valor máximo: {df['Reading'].max()}")
         print(f"Valor promedio: {df['Reading'].mean():.2f}")
-        print(f"{'='*50}\n")
+        print(f"{'=' * 50}\n")
 
         if save:
             # Crear carpeta graphs si no existe
